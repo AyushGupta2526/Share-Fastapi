@@ -1,15 +1,15 @@
 from fastapi import FastAPI, HTTPException, File, UploadFile, Form, Depends
-from app.schemas import PostCreate, PostResponse
+from app.schemas import PostCreate, PostResponse, UserRead, UserCreate, UserUpdate
 from app.db import Post, create_db_and_tables, get_async_session
 from sqlalchemy.ext.asyncio import AsyncSession
 from contextlib import asynccontextmanager
 from sqlalchemy import select
 from app.images import imagekit
-from imagekitio.models.UploadFileRequestOptions import UploadFileRequest
 import shutil
 import os
 import uuid
 import tempfile
+from app.users import current_active_user, auth_backend, fastapi_users
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -17,6 +17,14 @@ async def lifespan(app: FastAPI):
     yield
     
 app = FastAPI(lifespan=lifespan)
+
+app.include_router(
+    fastapi_users.get_auth_router(auth_backend),prefix="/auth/jwt", tags=["auth"]
+)
+
+app.include_router(
+    fastapi_users.get_register_router(UserRead, UserCreate), prefix="/auth", tags=["auth"]
+)
 
 @app.post("/upload")
 async def upload_file(
@@ -31,16 +39,14 @@ async def upload_file(
             temp_file_path = temp_file.name
             shutil.copyfileobj(file.file, temp_file)
             
-        upload_result = imagekit.upload_file(
+        upload_result = imagekit.files.upload(
             file=open(temp_file_path, "rb"),
             file_name=file.filename,
-            options=UploadFileRequest(
-                use_unique_file_name=True,
-                tags=["backend-upload"]
-            )
+            use_unique_file_name=True,
+            tags=["backend-upload"]
         )
 
-        if upload_result.status_code != 200:
+        if upload_result.url:
 
             post = Post(
                 caption=caption,
