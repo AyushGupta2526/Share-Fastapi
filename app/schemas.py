@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from fastapi import schemas
+from fastapi_users import schemas
 import uuid
 
 class PostCreate(BaseModel):
