@@ -9,7 +9,7 @@ import shutil
 import os
 import uuid
 import tempfile
-from app.users import current_active_user, auth_backend, fastapi_users
+from app.users import auth_backend, current_active_user, fastapi_users
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -19,7 +19,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 app.include_router(
-    fastapi_users.get_auth_router(auth_backend),prefix="/auth/jwt", tags=["auth"]
+    fastapi_users.get_auth_router(auth_backend), prefix="/auth/jwt", tags=["auth"]
 )
 
 app.include_router(
@@ -51,16 +51,16 @@ async def upload_file(
         with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file.filename)[1]) as temp_file:
             temp_file_path = temp_file.name
             shutil.copyfileobj(file.file, temp_file)
-            
-        upload_result = imagekit.files.upload(
-            file=open(temp_file_path, "rb"),
-            file_name=file.filename,
-            use_unique_file_name=True,
-            tags=["backend-upload"]
-        )
+
+        with open(temp_file_path, "rb") as f:
+            upload_result = imagekit.files.upload(
+                file=f,
+                file_name=file.filename,
+                use_unique_file_name=True,
+                tags=["backend-upload"]
+            )
 
         if upload_result.url:
-
             post = Post(
                 user_id=user.id,
                 caption=caption,
@@ -80,6 +80,7 @@ async def upload_file(
         if temp_file_path and os.path.exists(temp_file_path):
             os.unlink(temp_file_path)
         file.file.close()
+
 
 @app.get("/feed")
 async def get_feed(
@@ -104,11 +105,20 @@ async def get_feed(
                 "file_type": post.file_type,
                 "file_name": post.file_name,
                 "created_at": post.created_at.isoformat(),
-                "is_owner": post.user_id == user.id,
+                "is_owner": str(post.user_id) == str(user.id),
                 "email": user_dict.get(post.user_id, "Unknown")
             }
         )
     return {"posts": post_data}
+
+@app.delete("/users/me/delete")
+async def delete_own_account(
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(get_async_session)
+):
+    await session.delete(user)
+    await session.commit()
+    return {"success": True, "message": "Account deleted"}
 
 @app.delete("/posts/{post_id}")
 async def delete_post(
@@ -117,21 +127,26 @@ async def delete_post(
     user: User = Depends(current_active_user)
 ):
     try:
-        
         post_uuid = uuid.UUID(post_id)
         
-        result = await session.execute(select(Post).where(Post.id == post_id))
-        post = result.scalar().first()
+        result = await session.execute(select(Post).where(Post.id == post_uuid))
+        post = result.scalar_one_or_none()
         
         if not post:
             raise HTTPException(status_code=404, detail="Post not found")
         
-        if post.user_id != user.id:
+        if str(post.user_id) != str(user.id):
             raise HTTPException(status_code=403, detail="Not authorized to delete this post")
         
         await session.delete(post)
         await session.commit()
         
         return {"success": True, "message": "Post deleted successfully"}
+    
+    except HTTPException:
+        raise
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid post ID format")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    
